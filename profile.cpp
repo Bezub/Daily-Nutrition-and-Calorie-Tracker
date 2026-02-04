@@ -1,0 +1,209 @@
+#include "profile.h"
+#include "utils.h"     
+#include "models.h"
+#include <iostream>
+#include <fstream>
+#include <string>
+#include <cmath>
+#include <ctime>
+#include <iomanip>
+#include <cctype>       
+
+// Serializes core profile fields into the stream in "Key: Value" format.
+// Only writes the USER_PROFILE block, not detailed logs.
+static void writeProfileBlock(std::ostream& out, const UserProfile& p) {
+    out << "USER_PROFILE\n";
+    out << "Name: " << p.fullName << "\n";
+    out << "Age: " << p.age << "\n";
+    out << "Gender: " << p.gender << "\n";
+    out << "Height: " << p.height_cm << "\n";
+    out << "Weight: " << p.weight_kg << "\n";
+    out << "Activity_Level: " << p.activityLevel << "\n";
+    out << "Daily_Calorie_Target: " << static_cast<int>(p.dailyCaloriesTarget) << "\n";
+    out << "\n";
+}
+
+// Computes BMR (Basal Metabolic Rate) using the Mifflin-St Jeor formula.
+// Adjusts calculation based on gender (Male/Female).
+double calcBMR(const UserProfile& p) {
+    if (p.gender == "Male") {
+        return 10.0 * p.weight_kg + 6.25 * p.height_cm - 5.0 * p.age + 5.0;
+    } else {
+        return 10.0 * p.weight_kg + 6.25 * p.height_cm - 5.0 * p.age - 161.0;
+    }
+}
+
+// Returns a multiplier to convert BMR to TDEE based on activity level.
+// Uses substring matching to handle variations in activity level strings.
+double activityMultiplier(const std::string& level) {
+    std::string l = level;
+    if (l.find("Sedentary") != std::string::npos) return 1.2;
+    if (l.find("Lightly") != std::string::npos) return 1.375;
+    if (l.find("Moderately") != std::string::npos) return 1.55;
+    if (l.find("Very") != std::string::npos) return 1.725;
+    return 1.2;
+}
+
+// Computes daily calorie and macronutrient targets based on user stats.
+// Sets protein to 2g/kg, carbs to 55% of calories, and fat to 25% of calories.
+void calcMacroTargets(UserProfile& p) {
+    double bmr = calcBMR(p);
+    double tdee = bmr * activityMultiplier(p.activityLevel);
+    p.dailyCaloriesTarget = std::round(tdee);
+    p.targetProtein_g = std::round(p.weight_kg * 2.0);
+    p.targetCarbs_g = std::round((p.dailyCaloriesTarget * 0.55) / 4.0);
+    p.targetFat_g = std::round((p.dailyCaloriesTarget * 0.25) / 9.0);
+}
+
+// Prints the calculated daily nutrition targets (Calories, Protein, Carbs, Fat).
+// Formats output with fixed widths for readability.
+void displayNutritionTargets(const UserProfile& p) {
+    printHeader("DAILY NUTRITION TARGETS");
+    std::cout << left << setw(18) << "Calories:" << right << setw(6) << static_cast<int>(p.dailyCaloriesTarget) << " kcal\n";
+    std::cout << left << setw(18) << "Protein:" << right << setw(6) << static_cast<int>(p.targetProtein_g) << " g\n";
+    std::cout << left << setw(18) << "Carbohydrates:" << right << setw(6) << static_cast<int>(p.targetCarbs_g) << " g\n";
+    std::cout << left << setw(18) << "Fat:" << right << setw(6) << static_cast<int>(p.targetFat_g) << " g\n\n";
+    pauseConsole();
+}
+
+// Prints all user profile details to the console if a profile is loaded.
+// Displays fields like Name, Age, Gender, Height, Weight, and Activity Level.
+void displayProfile(const UserProfile& p) {
+    if (p.fullName.empty()) {
+        std::cout << "No profile loaded yet.\n";
+        pauseConsole();
+        return;
+    }
+
+    printHeader("MY PROFILE");
+    const int labelWidth = 18;
+    const int valueStartCol = 2; // single space after label
+    std::cout << left << setw(labelWidth) << "Username:" << string(valueStartCol, ' ') << p.username << "\n";
+    std::cout << left << setw(labelWidth) << "Full Name:" << string(valueStartCol, ' ') << p.fullName << "\n";
+    std::cout << left << setw(labelWidth) << "Age:" << string(valueStartCol, ' ') << p.age << " years\n";
+    std::cout << left << setw(labelWidth) << "Gender:" << string(valueStartCol, ' ') << p.gender << "\n";
+    std::cout << left << setw(labelWidth) << "Height:" << string(valueStartCol, ' ') << p.height_cm << " cm\n";
+    std::cout << left << setw(labelWidth) << "Weight:" << string(valueStartCol, ' ') << p.weight_kg << " kg\n";
+    std::cout << left << setw(labelWidth) << "Activity Level:" << string(valueStartCol, ' ') << p.activityLevel << "\n\n";
+
+    pauseConsole();
+}
+
+// Creates (or overwrites) the user's data file and saves the profile.
+// Called during registration to initialize the file.
+void createUserDataFile(const std::string& filename, const UserProfile& p) {
+    std::ofstream fout(filename);
+    if (!fout) {
+        std::cerr << "Error creating file: " << filename << "\n";
+        pauseConsole();
+        return;
+    }
+
+    writeProfileBlock(fout, p);
+    fout.close();
+    std::cout << "Profile saved to " << filename << "\n";
+    pauseConsole();
+}
+
+// Reads profile data from the user's file and populates the UserProfile struct.
+// Recalculates macro targets after loading the raw data.
+void loadProfileFromFile(const std::string& filename, UserProfile& p) {
+    std::ifstream fin(filename);
+    if (!fin) {
+        std::cerr << "Error opening file: " << filename << "\n";
+        pauseConsole();
+        return;
+    }
+
+    // Infer username from filename pattern "user_<username>_data.txt"
+    // If filename matches, set p.username so other modules have it available.
+    size_t ustart = filename.find("user_");
+    size_t uend = filename.find("_data");
+    if (ustart != std::string::npos && uend != std::string::npos && uend > ustart + 5) {
+        p.username = filename.substr(ustart + 5, uend - (ustart + 5));
+    }
+
+    std::string line;
+    bool inProfile = false;
+
+    while (std::getline(fin, line)) {
+        if (line == "USER_PROFILE") {
+            inProfile = true;
+            continue;
+        }
+        if (inProfile && line.empty()) break;
+
+        size_t colon = line.find(": ");
+        if (colon == std::string::npos) continue;
+
+        std::string key = line.substr(0, colon);
+        std::string val = line.substr(colon + 2);
+
+        if (key == "Name") p.fullName = val;
+        else if (key == "Age") p.age = std::stoi(val);
+        else if (key == "Gender") p.gender = val;
+        else if (key == "Height") p.height_cm = std::stod(val);
+        else if (key == "Weight") p.weight_kg = std::stoi(val);
+        else if (key == "Activity_Level") p.activityLevel = val;
+        else if (key == "Daily_Calorie_Target") p.dailyCaloriesTarget = std::stod(val);
+    }
+
+    fin.close();
+    calcMacroTargets(p);
+}
+
+
+// Prompts the user to update their weight and recalculates nutrition targets.
+
+void updateWeightAndTargets(const std::string& filename, UserProfile& p) {
+    std::cout << "\n--- Update Weight ---\n";
+    std::cout << "Current weight: " << p.weight_kg << " kg\n";
+    std::cout << "Enter new weight (kg) or 'b' to back/cancel: ";
+
+    std::string input;
+    std::getline(std::cin, input);
+
+    std::string lower = input;
+    for (char& c : lower) c = std::tolower(c);
+
+    if (lower == "b" || lower == "back" || lower == "cancel") {
+        std::cout << "Update cancelled — returning to menu.\n";
+        pauseConsole();
+        return;
+    }
+
+    double newWeight;
+    try {
+        newWeight = std::stod(input);
+    } catch (...) {
+        std::cout << "Invalid input. Update cancelled.\n";
+        pauseConsole();
+        return;
+    }
+
+    if (newWeight <= 0) {
+        std::cout << "Invalid weight. Update cancelled.\n";
+        pauseConsole();
+        return;
+    }
+
+    p.weight_kg = newWeight;
+    calcMacroTargets(p);
+
+    std::cout << "Weight updated to " << newWeight << " kg.\n";
+    displayNutritionTargets(p);
+
+    std::fstream file(filename, std::ios::in | std::ios::out);
+    if (!file) {
+        std::cerr << "Error opening file: " << filename << "\n";
+        pauseConsole();
+        return;
+    }
+
+    file.seekp(0);
+    writeProfileBlock(file, p);
+
+    file.close();
+    std::cout << "Profile updated and weight history recorded.\n";
+    pauseConsole();
+}
