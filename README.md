@@ -28,3 +28,12 @@ I specifically implemented the **food logging and daily consumption features**, 
 - Displaying daily consumption summaries including calories and nutritional information
 
 I also collaborated on overall program structure with my team members.
+
+## How to Run
+
+1. Make sure you have a C++ compiler installed (e.g., `g++`).
+2. Open a terminal in the project folder.
+3. Compile all the `.cpp` files together:
+
+```bash
+g++ main.cpp auth.cpp food.cpp profile.cpp recommendations.cpp utils.cpp -o calorie_tracker
